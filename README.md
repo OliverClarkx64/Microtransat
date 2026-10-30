@@ -11,7 +11,7 @@ CD "filepath"
 git init 
 git clone https://github.com/OliverClarkx64/Microtransat
 git remote add origin https://github.com/OliverClarkx64/Microtransat
-git pull origin master
+git pull origin main
 
 ^^now you have the files setup on your system^^
 
@@ -23,12 +23,12 @@ clone/pull github before doing any work (in CMD or Powershell):
     -git pull origin master
 Then make your edits however you want
 Clone again before commiting anything
-    -git pull origin master
+    -git pull origin main
 Then add any additional files:
     -git add -A
 Commit changes with small note of whats changed:
     -git commit -a -m "message for commit"
 push update:
-    -git push origin master
+    -git push origin main
 
 And You're done
