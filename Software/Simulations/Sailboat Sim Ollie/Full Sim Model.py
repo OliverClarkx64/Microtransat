@@ -212,25 +212,51 @@ def control_wrapper(controlFunc):
 ##only let integral raise when certain error threholds??
 ##try these with the goal of keeping integral error memory short since the control is continuously changing and not holding steady state errors
 
+##[min speed, p, i, d]
+rudderGainMap = np.array([
+        [0, 1.0, 0.02, 1.5], ##0-a [m/s]
+        [0, 0, 0, 0], ##a-b [m/s]
+        [0, 0, 0, 0]  ##b-c [m/s] expand more slots if necessary
+    ])
+
 class Autopilot:
     """Heading PID (Eq. 37-38) on rudder + linear sail angle (Eq. 40) on sail."""
-    def __init__(self, Kp=1.0, Ki=0.02, Kd=1.5, dr_max=0.5):
+    ##rudder gain map to replace individual gains
+    def __init__(self, rudderGainMap, Kp=1.0, Ki=0.02, Kd=1.5, dr_max=0.5, ): ##init PID values - tune with nomoto model and introoduce gain schedule
         self.Kp, self.Ki, self.Kd, self.dr_max = Kp, Ki, Kd, dr_max
         self.integ = 0.0
+        self.rudderGainMap = rudderGainMap
 
     @control_wrapper ##wraps heading logic onto rudder control
     def step(self, X, psi_d, wind, dt): ##states, desired heading, wind params, timestep
-
     ##add path following instead of just heading control
     ##actually wrap path following ontop of heading control
+
         eta, nu = X[:4], X[4:]
+        ##get pid response
+        self.Kp, self.Ki, self.Kd = self.rudderGainMap[0][1:] ## replace with speed dependant pid response
+
+
+        ##############ADD WHEN THRESHOLDS KNOWN#################
+##        ## speed in 2 components u and v which are so abs(sqrt(eta[0]**2 + eta[1]**2)
+##        ##optimise this to not run every cycle and to switch when thresholds met
+##        speed = abs(sqrt(nu[0]**2 + nu[1]**2)
+##        for i in range(len(self.rudderGainMap): ##range len so that prev data can be selected
+##            if speed < i[0]: ##works because map goes up in speed so when speed finally smaller then resposne then select prev response
+##                self.Kp, self.Ki, self.Kd = self.rudderGainMap[i-1][1:] ##selects prev map data
+##                break
+##
+
+        
+        ##calc error
         e = wrap(psi_d - eta[3])   ##desired heading - current heading / wrap forces slow motions  --error                    ##Equations 37
         r = nu[3]   ##current rate of change of heading
         summedTerms = self.Kp * e + self.Ki * self.integ - self.Kd * r * np.cos(eta[2])  ##add P I D terms
         dr = np.clip(summedTerms, -self.dr_max, self.dr_max) ##limits rudder angle mechanically
         if dr == summedTerms:                                   # prevents integral windup only accumulates when the rudder isnt saturated - prevents large integral erm
             self.integ += e * dt ##add up integral term
-            
+
+        ##rough sail control
         _, a_aw = apparent_wind(nu, eta, wind, P["sail"])
         ds_max, ds_min = np.pi / 2, 0.0
         ds = (ds_max - ds_min) * a_aw / np.pi + ds_min    ##Equations 40, signed by tack
@@ -240,8 +266,8 @@ class Autopilot:
 #####plot
 def main():
     import matplotlib.pyplot as plt
-    global ds, dr ##so adjustments can be made in different functions
-    ds , dr = np.pi/2,0
+    global ds, dr, rudderGainMap ##so adjustments can be made in different functions
+    ds , dr = np.pi/2,0 ##sets initial sail and rudder angles
 
     fig = plt.figure(figsize=(8, 8))
     ax = plt.axes(xlim=(-12, 12), ylim=(-12, 12))
@@ -265,7 +291,7 @@ def main():
     ##psi_d is desired heading
     ##stores all the info for the model including which control to use
     state = {"X": np.zeros(8), "psi_d": 0.0, "wind_vec": np.array([5.0, 0.0]),
-             "dragging": False, "trail": [], "running": True, "ap": Autopilot()} ##initialise autopilot object under name state["ap"]
+             "dragging": False, "trail": [], "running": True, "ap": Autopilot(rudderGainMap)} ##initialise autopilot object under name state["ap"]
 
     def reset():
         state["X"] = np.zeros(8)
@@ -292,8 +318,8 @@ def main():
     
     def on_key(event):
         global ds, dr
-        if event.key == "a": dr -= 0.15##state["psi_d"] = wrap(state["psi_d"] - 0.15)
-        elif event.key == "d": dr += 0.15##["psi_d"] = wrap(state["psi_d"] + 0.15) ##change desired heading
+        if event.key == "a": state["psi_d"] = wrap(state["psi_d"] - 0.15) ## manual control rudder dr -= 0.15##
+        elif event.key == "d": state["psi_d"] = wrap(state["psi_d"] + 0.15) ##change desired heading ## manual control rudder dr += 0.15##
         elif event.key == "r": reset()
 
     def set_wind(event):
