@@ -181,30 +181,63 @@ def rk4_step(X, dt, delta_s, delta_r, wind):
     return X
 
 
-def wrap(a): ##
+def wrap(a): ##wraps round movement onto shorter path
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
 ######control
+####guidance
+        ##take path turn into waypoints
+        ##keep track of which waypoint has been passed if stored correctly then use index
+        ##draw theoretical line for offset calc
 
-##LOS guidance calcs heading giveninfo about path
-def LOS():
-    return
+##LOS guidance calcs heading given info about path
+def LOS(X, wp0, wp1, alpha, lookahead = 8):
+    ##global current x y pos
+    N, E = X[0], X[1]
+    ##calc offset error by normalising and trig - assume right angle makes closest point
+    e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
+    return wrap(alpha - np.arctan2(e, lookahead))
 
+##maybe move this into anoter method
 def control_wrapper(controlFunc):
+    """determines mode to use and returns desired heading also tracks waypoint coverage"""
     def wrapper(*args, **kwargs):
-        ##determine mode
-        ##calc desired heading psi_d
-        ##need set path
-        ##if relative wind direction to path then keep, tack, jibe
+        global state    ##need state globalled because a function inside of
+                        ##another function uses the same
+                        ##local variables however this is outside of that scope so copletely isolated
+        ##args in format: self, X, psi_d, wind, dt
+        ##unpack args
+        self, X, wind, dt = args
+        wp0, wp1 = self.wp[self.wpIndex], self.wp[self.wpIndex + 1] ##set current + next index
+        ##calc euclidian angle between waypoints remember we set x to be north and y to be east
+        dE = wp1[0] - wp0[0]
+        dN = wp1[1] - wp0[1]
+        ##y is east x is north
+        ##a tan 2 takes euclidian y,x so bearing from north given as
+        wpAngle = np.arctan2(dE, dN) ##wp1 x,y - wp0 x,y
+        windAngle = wind[1] ##wind - (speed, bearing toward)
+        ##compare to angle of wind
+        dangle = abs(wpAngle - windAngle)
+        ##0 - in line; > 45 keep; >135 tack
+        ##select mode - use only LOS for now
+        
+        ##calc desired heading psi_d and update wpIndex
 
-        #parse wind info
-        #calc difference to path
-        #decide on keep tack or jibe
-        #then LOS or other algorithm
-        ds, dr = (controlFunc(*args, **kwargs)) ## calls/runs wrapped function
+        psi_d = LOS(X, wp0, wp1, wpAngle)
+        state["psi_d"] = psi_d ##keeps state/drawing updated
+
+        ##check on incrementing waypoint - 15m switch distance
+        if (np.hypot(wp1[0] - X[1], wp1[1] - X[0]) <= 15) and (self.wpIndex < len(self.wp)):
+                    self.wpIndex += 1
+
+        
+        
+
+##      parse self, X, psi_d, wind, dt
+        ds, dr = (controlFunc(self, X, psi_d, wind, dt)) ## calls/runs wrapped function
         return ds, dr
-    return wrapper
+    return wrapper ##returns return of wrapper
 
 
 ##for PID bind the integral term to prevent accumulative issues
@@ -215,17 +248,19 @@ def control_wrapper(controlFunc):
 ##[min speed, p, i, d]
 rudderGainMap = np.array([
         [0, 1.0, 0.02, 1.5], ##0-a [m/s]
-        [0, 0, 0, 0], ##a-b [m/s]
-        [0, 0, 0, 0]  ##b-c [m/s] expand more slots if necessary
+        [100, 0, 0, 0], ##a-b [m/s]
+        [101, 0, 0, 0]  ##b-c [m/s] expand more slots if necessary
     ])
 
 class Autopilot:
     """Heading PID (Eq. 37-38) on rudder + linear sail angle (Eq. 40) on sail."""
     ##rudder gain map to replace individual gains
-    def __init__(self, rudderGainMap, Kp=1.0, Ki=0.02, Kd=1.5, dr_max=0.5, ): ##init PID values - tune with nomoto model and introoduce gain schedule
+    def __init__(self, rudderGainMap, wp, wpIndex, Kp=1.0, Ki=0.02, Kd=1.5, dr_max=0.5, ): ##init PID values - tune with nomoto model and introoduce gain schedule
         self.Kp, self.Ki, self.Kd, self.dr_max = Kp, Ki, Kd, dr_max
         self.integ = 0.0
         self.rudderGainMap = rudderGainMap
+        self.wp = wp
+        self.wpIndex = wpIndex
 
     @control_wrapper ##wraps heading logic onto rudder control
     def step(self, X, psi_d, wind, dt): ##states, desired heading, wind params, timestep
@@ -240,12 +275,12 @@ class Autopilot:
         ##############ADD WHEN THRESHOLDS KNOWN#################
 ##        ## speed in 2 components u and v which are so abs(sqrt(eta[0]**2 + eta[1]**2)
 ##        ##optimise this to not run every cycle and to switch when thresholds met
-##        speed = abs(sqrt(nu[0]**2 + nu[1]**2)
-##        for i in range(len(self.rudderGainMap): ##range len so that prev data can be selected
-##            if speed < i[0]: ##works because map goes up in speed so when speed finally smaller then resposne then select prev response
-##                self.Kp, self.Ki, self.Kd = self.rudderGainMap[i-1][1:] ##selects prev map data
-##                break
-##
+        speed = abs(nu[0]) ##surge speed
+        for i in range(len(self.rudderGainMap)): ##range len so that prev data can be selected
+            if speed < self.rudderGainMap[i][0]: ##works because map goes up in speed so when speed finally smaller then resposne then select prev response
+                self.Kp, self.Ki, self.Kd = self.rudderGainMap[i-1][1:] ##selects prev map data
+                PIDtune = i
+                break
 
         
         ##calc error
@@ -256,7 +291,7 @@ class Autopilot:
         if dr == summedTerms:                                   # prevents integral windup only accumulates when the rudder isnt saturated - prevents large integral erm
             self.integ += e * dt ##add up integral term
 
-        ##rough sail control
+        ##rough sail control using linear sail angle approach
         _, a_aw = apparent_wind(nu, eta, wind, P["sail"])
         ds_max, ds_min = np.pi / 2, 0.0
         ds = (ds_max - ds_min) * a_aw / np.pi + ds_min    ##Equations 40, signed by tack
@@ -266,11 +301,11 @@ class Autopilot:
 #####plot
 def main():
     import matplotlib.pyplot as plt
-    global ds, dr, rudderGainMap ##so adjustments can be made in different functions
+    global ds, dr, rudderGainMap, state ##so adjustments can be made in different functions
     ds , dr = np.pi/2,0 ##sets initial sail and rudder angles
 
-    fig = plt.figure(figsize=(8, 8))
-    ax = plt.axes(xlim=(-12, 12), ylim=(-12, 12))
+    fig = plt.figure(figsize=(10, 10))
+    ax = plt.axes(xlim=(-20, 20), ylim=(-20, 20))
     ax.set_aspect("equal")
     ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.grid(alpha=0.3)
 
@@ -287,21 +322,39 @@ def main():
                              arrowprops=dict(arrowstyle="->", lw=3, color="tab:blue"))
     wind_text = ax.text(0, 0, "", color="tab:blue")
 
+    ##precomputed waypoints
+    waypoints = [
+            [0,0], ##need to include start pos
+            [20,50],
+            [0,100],
+        ]
+    wpIndex = 0 ##current passed waypoint
+    
+    ##plot waypoints
+    for i in range(1, len(waypoints)):
+        try:
+            print(waypoints[i-1], waypoints[i])
+            ax.plot([waypoints[i-1][0],waypoints[i][0]], [waypoints[i-1][1],waypoints[i][1]], "--") ###in xxxxx yyyyy not xy xy
+        except:
+            print("end waypoint")
+
+
     ##init environmental conditions, X is ship states
     ##psi_d is desired heading
     ##stores all the info for the model including which control to use
     state = {"X": np.zeros(8), "psi_d": 0.0, "wind_vec": np.array([5.0, 0.0]),
-             "dragging": False, "trail": [], "running": True, "ap": Autopilot(rudderGainMap)} ##initialise autopilot object under name state["ap"]
+             "dragging": False, "trail": [], "running": True,
+             "ap": Autopilot(rudderGainMap, waypoints, wpIndex)} ##initialise autopilot object under name state["ap"]
 
+
+
+
+    
     def reset():
         state["X"] = np.zeros(8)
         state["psi_d"] = 0.0
         state["ap"] = Autopilot()
         state["trail"] = []
-
-    def calc_heading():
-        ##determine state to be in then LOS or manouvre
-        return
 
     def wind_tuple():
         wx, wy = state["wind_vec"]                        # plot-x = East, plot-y = North
@@ -318,6 +371,7 @@ def main():
     
     def on_key(event):
         global ds, dr
+        ##no longer adjusts actual desired heading
         if event.key == "a": state["psi_d"] = wrap(state["psi_d"] - 0.15) ## manual control rudder dr -= 0.15##
         elif event.key == "d": state["psi_d"] = wrap(state["psi_d"] + 0.15) ##change desired heading ## manual control rudder dr += 0.15##
         elif event.key == "r": reset()
@@ -338,8 +392,8 @@ def main():
     plt.ion()
 
     while state["running"]:
-        v_tw, a_tw = wind_tuple() ##true wind
-        wind = (v_tw, a_tw)
+        v_tw, a_tw = wind_tuple() ##true wind returns hypotneuse and angle
+        wind = (v_tw, a_tw) 
         ##run calcs
         ## get sail and rudder pos from controllers
         ##push sail and rudder angles theough rk4 which handles first order ODE integration
@@ -348,7 +402,8 @@ def main():
         for _ in range(substeps):
             ##.step()is the method in the controller class
             ##update rudder and sail positions from conroller
-            ds, dr = state["ap"].step(state["X"], state["psi_d"], wind, dt) ##update control response taking in error etc
+            ##change heading input into current pos and waypoints -- state["psi_d"]
+            ds, dr = state["ap"].step(state["X"], wind, dt) ##update control response taking in error etc
             state["X"] = rk4_step(state["X"], dt, ds, dr, wind)   # inputs held over the step
 
 
@@ -379,8 +434,11 @@ def main():
         trail_line.set_data(t[:, 0], t[:, 1])
 
         
-        # view + wind arrow follow boat
-        ax.set_xlim(X[1] - 12, X[1] + 12); ax.set_ylim(X[0] - 12, X[0] + 12)
+        ##view window -- follows boat
+        ax.set_xlim(X[1] - 20, X[1] + 20); ax.set_ylim(X[0] - 20, X[0] + 20)
+        ##stays still
+        #ax.set_xlim(-50, 50); ax.set_ylim(-5, 105)
+        ##wind arrow follows view
         ox, oy = wind_origin()
         wind_arrow.set_position((ox, oy))
         wind_arrow.xy = (ox + state["wind_vec"][0], oy + state["wind_vec"][1])
