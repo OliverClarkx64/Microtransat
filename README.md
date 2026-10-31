@@ -20,9 +20,9 @@ git pull origin main
 
 ---How to keep files up to date--- (do this every time you work)
 clone/pull github before doing any work (in CMD or Powershell):
-    -git pull origin master
+    -git pull origin main
 Then make your edits however you want
-Clone again before commiting anything
+Pull again before committing anything
     -git pull origin main
 Then add any additional files:
     -git add -A
