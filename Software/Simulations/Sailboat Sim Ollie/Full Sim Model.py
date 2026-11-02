@@ -181,7 +181,7 @@ def rk4_step(X, dt, delta_s, delta_r, wind):
     return X
 
 
-def wrap(a): ##wraps round movement onto shorter path
+def wrap(a): ##wraps round movement onto shorter path -- lets say a bearing of over 2 pi gets converted to only whats over to ismplify bearings and prevent large angles
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
@@ -192,12 +192,85 @@ def wrap(a): ##wraps round movement onto shorter path
         ##draw theoretical line for offset calc
 
 ##LOS guidance calcs heading given info about path
-def LOS(X, wp0, wp1, alpha, lookahead = 8):
+def LOS(X, wp0, wp1, alpha, wind, lookahead = 8): ##e - cross track error
     ##global current x y pos
     N, E = X[0], X[1]
     ##calc offset error by normalising and trig - assume right angle makes closest point
     e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
-    return wrap(alpha - np.arctan2(e, lookahead))
+    windDirection = wind[1]
+    ##also clip to the no go zone to prevent heading into no go
+    ##already decided path isnt in no go so should be fine but think more about
+    ##if wind changes etc maybe change motin selection criteria
+    return wrap(alpha - np.arctan2(e, lookahead)) ## np.clip(, windDirection - 2.27, windDirection + 2.27)# += 50 deg
+
+def tack(X, wp0, wp1, alpha, wind, self):
+    N, E = X[0], X[1]
+    ##switch between a clip of to los of path or something windDirection - 2.27, windDirection + 2.27
+    e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
+
+    if self.justStarted: ##see if it should go right or left
+        self.right = True
+        self.justStarted = False
+
+
+    ##ok can do this circle logic or just incrementally add at a given rate 
+    if e >= 10 and self.onCircle == False: # switch from right to left init circle manouvre
+        ##define circle centre
+        self.cN = N - self.cR*np.sin(X[3]) ##heading ##doesnt account for which way the circle is
+        self.cE = E + self.cR*np.cos(X[3])
+        self.onCircle = True
+
+    if self.onCircle:
+        if self.right:
+            ##determine pos on circle
+            ##bearing so east is y
+            self.circlePhi = np.atan2(E - self.cE, N - self.cN)
+            psi_d = wrap(self.circlePhi + np.pi/2) ##account for direction here too 
+            
+        else:
+            self.circlePhi = np.atan2(E - self.cE, N - self.cN) ##the same need direction control +1 or -1 scale
+            psi_d = self.circlePhi + np.pi/2
+    else:
+        if self.right:
+            psi_d = wind[1] - 2.27
+        else:
+            psi_d = wind[1] + 2.27
+
+    if self.onCircle and abs(psi_d - wind[1]) < 2.1: ##close to no go then switch side
+        ##switch side after circle
+        if self.right:
+            self.right = False
+        else:
+            self.right = True
+        self.onCircle = False ## how do i ensure another loop doesnt start?
+
+##    if just started = True
+##      find closest path to current heading
+##      set heading to that path
+##      just started = False
+    
+##    if on circle = false and e > set distance:
+##        define circle centre at rearranged e equation
+##        on circle circle = true
+##        
+##    if on circle = true and right of wind:
+##        circle logic
+##        
+##    elif on circle = true and left of wind:
+##        circle logic
+##
+##    if on circle = true and end of circle (heading = other side of wind -- windDirection +- 2.27):
+##        on circle = false
+##        heading = other side of no go
+        ##ok could bring errors of triggering another circle
+
+    ##first try switching
+    ##track left and right method or try wrapping to each side with a fixed adding term
+        
+    return psi_d
+
+def jibe(X, wp0, wp1, alpha, wind):
+    return wind[1] - 2.27
 
 ##maybe move this into anoter method
 def control_wrapper(controlFunc):
@@ -210,7 +283,7 @@ def control_wrapper(controlFunc):
         ##unpack args
         self, X, wind, dt = args
         wp0, wp1 = self.wp[self.wpIndex], self.wp[self.wpIndex + 1] ##set current + next index
-        ##calc euclidian angle between waypoints remember we set x to be north and y to be east
+        ##calc euclidian angle between waypoints remember notation is x to be north and y to be east
         dE = wp1[0] - wp0[0]
         dN = wp1[1] - wp0[1]
         ##y is east x is north
@@ -219,17 +292,37 @@ def control_wrapper(controlFunc):
         windAngle = wind[1] ##wind - (speed, bearing toward)
         ##compare to angle of wind
         dangle = abs(wpAngle - windAngle)
-        ##0 - in line; > 45 keep; >135 tack
-        ##select mode - use only LOS for now
+        hangle = abs(state["psi_d"] - windAngle) ##heading alternative
+        ##0 - in line so tack; > 45 keep; >135 jibe
         
+        ##maybe calc cros track error here as used in keep, tack and jibe
+        ##e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha)
+
+        ##select mode - use only LOS for now
+        ## wind is a coming from bearing and heading is going to so flipped
+
+        
+        
+        ##i think going off of desired heading and assuming LOS will be more robust then capping LOS and going from path ## but this will instantly LOS as soon as tack or jibe initiated
+        if dangle < 0.87 or hangle < 0.87: ##50 deg in radians
+            psi_d = jibe(X, wp0, wp1, wpAngle, wind)
+        elif dangle < 2.36: ##135 degrees
+            psi_d = LOS(X, wp0, wp1, wpAngle, wind)
+        elif dangle >= 2.36 or hangle >= 2.35:
+            psi_d = tack(X, wp0, wp1, wpAngle, wind, self)
+
+##        could do los always
+##        then if hangle from output with tack and jibe which would force tack on poor los but could just np.clip like earlier
+##        los without ectra control could cause dead in irons if pushed off track when already close to no go zone IMPORTANT
+            
         ##calc desired heading psi_d and update wpIndex
 
-        psi_d = LOS(X, wp0, wp1, wpAngle)
         state["psi_d"] = psi_d ##keeps state/drawing updated
 
         ##check on incrementing waypoint - 15m switch distance
         if (np.hypot(wp1[0] - X[1], wp1[1] - X[0]) <= 15) and (self.wpIndex < len(self.wp)):
-                    self.wpIndex += 1
+            self.wpIndex += 1
+            self.justStarted = True
 
         
         
@@ -262,6 +355,16 @@ class Autopilot:
         self.wp = wp
         self.wpIndex = wpIndex
 
+        ##circle logic and just tack jibe stuff
+        self.justStarted = True ## keeps track of new motion type
+        self.right = True ## for right and left tracking when tacking and jibing
+        self.onCircle = False ##keep track of if its circling
+        self.circlePhi = 0 ##pos on circle
+        self.cN = 0 ##north
+        self.cE = 0 ##east
+        self.cR = 5 ##radius
+
+        
     @control_wrapper ##wraps heading logic onto rudder control
     def step(self, X, psi_d, wind, dt): ##states, desired heading, wind params, timestep
     ##add path following instead of just heading control
@@ -327,6 +430,7 @@ def main():
             [0,0], ##need to include start pos
             [20,50],
             [0,100],
+            [-50,100]
         ]
     wpIndex = 0 ##current passed waypoint
     
@@ -346,7 +450,8 @@ def main():
              "dragging": False, "trail": [], "running": True,
              "ap": Autopilot(rudderGainMap, waypoints, wpIndex)} ##initialise autopilot object under name state["ap"]
 
-
+    ##tack circle preset scatter plot#
+    circ = ax.scatter([0], [0], s = 50 )
 
 
     
@@ -432,6 +537,9 @@ def main():
         state["trail"] = state["trail"][-600:]
         t = np.array(state["trail"])
         trail_line.set_data(t[:, 0], t[:, 1])
+
+        ##draw circle for tack
+        circ.set_offsets([[state["ap"].cE, state["ap"].cN]])
 
         
         ##view window -- follows boat
