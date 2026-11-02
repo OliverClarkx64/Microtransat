@@ -10,6 +10,7 @@ Plot   : plot-x = East, plot-y = North.
 Controls: drag mouse = set wind (arrow points where wind blows TO)
           a / d = turn desired heading to port / starboard
           r     = reset boat
+By Ollie C
 """
 import sys
 import numpy as np
