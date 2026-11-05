@@ -7,9 +7,6 @@ Inputs : delta_s (sail angle), delta_r (rudder angle), true wind (v_tw, alpha_tw
          alpha_tw = direction the wind blows TOWARD, bearing from North (rad).
 Plot   : plot-x = East, plot-y = North.
 
-Controls: drag mouse = set wind (arrow points where wind blows TO)
-          a / d = turn desired heading to port / starboard
-          r     = reset boat
 By Ollie C
 """
 import sys
@@ -21,7 +18,7 @@ X_ud, Y_vd, K_pd, N_rd = -10.0, -80.0, -10.0, -20.0      # added-mass derivative
 
 CL_fun = lambda a: 2 * np.pi * np.sin(a) * np.cos(a)     # crude flat-plate-ish placeholder
 
-##main ramamater
+##main pamamater
 ##density of water and air
 ##equation constants
 P = {
@@ -183,7 +180,7 @@ def rk4_step(X, dt, delta_s, delta_r, wind):
 
 
 def wrap(a): ##wraps round movement onto shorter path -- lets say a bearing of over 2 pi gets converted to only whats over to ismplify bearings and prevent large angles
-    return (a + np.pi) % (2 * np.pi) - np.pi
+    return (a + np.pi) % (2 * np.pi) - np.pi ##wraps to 360deg
 
 
 ######control
@@ -204,7 +201,44 @@ def LOS(X, wp0, wp1, alpha, wind, lookahead = 8): ##e - cross track error
     ##if wind changes etc maybe change motin selection criteria
     return wrap(alpha - np.arctan2(e, lookahead)) ## np.clip(, windDirection - 2.27, windDirection + 2.27)# += 50 deg
 
-def tack(X, wp0, wp1, alpha, wind, self):
+def tack(X, wp0, wp1, alpha, wind, self, dt):
+
+    if self.justStarted: ##see if it should go right or left for first manouvre
+        self.right = True
+        self.justStarted = False
+
+    ##
+    s = 1 if self.right else -1
+
+    psi_d = wrap(wind[1] - s*2.27)
+    N, E = X[0], X[1]
+    ##switch between a clip of to los of path or something windDirection - 2.27, windDirection + 2.27
+    e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
+
+    ##start circle manouvre 
+    if abs(e) >= 10 and self.tacking == False: # switch from right to left init circle manouvre
+        ##define rate of change of heading
+        self.phi_dot = 0.4 ##[rad/s^2] ##change depending on wind speed
+        self.tacking = True
+
+    self.phiAccum += s*self.phi_dot*dt if self.tacking else 0
+
+    ##switch tack side
+##    if self.tacking:
+##        self.phiAccum += s*self.phi_dot*dt
+        
+    if self.tacking and (wrap(psi_d + self.phiAccum) - wind[1]) < 2.3:#2.2: ##close to no go then switch side
+        ##switch side after circle
+        self.right = False if self.right else True
+        self.tacking = False
+        self.phiAccum = 0
+        ###change this if else to 2 ifs
+
+    ##maybe just point psi_d slightly ahead of our actual heading to prevent overshooting the desired
+    return wrap(psi_d + self.phiAccum)
+
+
+def tack2(X, wp0, wp1, alpha, wind, self, dt):
     N, E = X[0], X[1]
     ##switch between a clip of to los of path or something windDirection - 2.27, windDirection + 2.27
     e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
@@ -212,7 +246,6 @@ def tack(X, wp0, wp1, alpha, wind, self):
     if self.justStarted: ##see if it should go right or left
         self.right = True
         self.justStarted = False
-
 
     ##ok can do this circle logic or just incrementally add at a given rate 
     if e >= 10 and self.onCircle == False: # switch from right to left init circle manouvre
@@ -227,7 +260,6 @@ def tack(X, wp0, wp1, alpha, wind, self):
             ##bearing so east is y
             self.circlePhi = np.atan2(E - self.cE, N - self.cN)
             psi_d = wrap(self.circlePhi + np.pi/2) ##account for direction here too 
-            
         else:
             self.circlePhi = np.atan2(E - self.cE, N - self.cN) ##the same need direction control +1 or -1 scale
             psi_d = self.circlePhi + np.pi/2
@@ -237,33 +269,13 @@ def tack(X, wp0, wp1, alpha, wind, self):
         else:
             psi_d = wind[1] + 2.27
 
-    if self.onCircle and abs(psi_d - wind[1]) < 2.1: ##close to no go then switch side
+    if self.onCircle and abs(psi_d - wind[1]) > 2.3: ##close to no go then switch side
         ##switch side after circle
         if self.right:
             self.right = False
         else:
             self.right = True
         self.onCircle = False ## how do i ensure another loop doesnt start?
-
-##    if just started = True
-##      find closest path to current heading
-##      set heading to that path
-##      just started = False
-    
-##    if on circle = false and e > set distance:
-##        define circle centre at rearranged e equation
-##        on circle circle = true
-##        
-##    if on circle = true and right of wind:
-##        circle logic
-##        
-##    elif on circle = true and left of wind:
-##        circle logic
-##
-##    if on circle = true and end of circle (heading = other side of wind -- windDirection +- 2.27):
-##        on circle = false
-##        heading = other side of no go
-        ##ok could bring errors of triggering another circle
 
     ##first try switching
     ##track left and right method or try wrapping to each side with a fixed adding term
@@ -277,7 +289,7 @@ def jibe(X, wp0, wp1, alpha, wind):
 def control_wrapper(controlFunc):
     """determines mode to use and returns desired heading also tracks waypoint coverage"""
     def wrapper(*args, **kwargs):
-        global state    ##need state globalled because a function inside of
+        global state, mode    ##need state globalled because a function inside of
                         ##another function uses the same
                         ##local variables however this is outside of that scope so copletely isolated
         ##args in format: self, X, psi_d, wind, dt
@@ -302,21 +314,26 @@ def control_wrapper(controlFunc):
         ##select mode - use only LOS for now
         ## wind is a coming from bearing and heading is going to so flipped
 
-        
-        
         ##i think going off of desired heading and assuming LOS will be more robust then capping LOS and going from path ## but this will instantly LOS as soon as tack or jibe initiated
-        if dangle < 0.87 or hangle < 0.87: ##50 deg in radians
+        if self.tacking: ##latch tack in manouvering
+            psi_d = tack(X, wp0, wp1, wpAngle, wind, self, dt)
+        elif self.jibing:
             psi_d = jibe(X, wp0, wp1, wpAngle, wind)
+        elif dangle < 0.87 or hangle < 0.87: ##50 deg in radians
+            psi_d = jibe(X, wp0, wp1, wpAngle, wind)
+            mode = "Jibe"
         elif dangle < 2.36: ##135 degrees
             psi_d = LOS(X, wp0, wp1, wpAngle, wind)
-        elif dangle >= 2.36 or hangle >= 2.35:
-            psi_d = tack(X, wp0, wp1, wpAngle, wind, self)
+            mode = "Course keeping"
+        elif dangle >= 2.35 or hangle >= 2.35:
+            psi_d = tack(X, wp0, wp1, wpAngle, wind, self, dt)
+            mode = "Tacking"
+
+        
 
 ##        could do los always
 ##        then if hangle from output with tack and jibe which would force tack on poor los but could just np.clip like earlier
 ##        los without ectra control could cause dead in irons if pushed off track when already close to no go zone IMPORTANT
-            
-        ##calc desired heading psi_d and update wpIndex
 
         state["psi_d"] = psi_d ##keeps state/drawing updated
 
@@ -358,9 +375,14 @@ class Autopilot:
 
         ##circle logic and just tack jibe stuff
         self.justStarted = True ## keeps track of new motion type
+        ##latch modes
+        self.tacking = False
+        self.jibing = False
         self.right = True ## for right and left tracking when tacking and jibing
         self.onCircle = False ##keep track of if its circling
         self.circlePhi = 0 ##pos on circle
+        self.phi_dot = 0
+        self.phiAccum = 0
         self.cN = 0 ##north
         self.cE = 0 ##east
         self.cR = 5 ##radius
@@ -405,8 +427,9 @@ class Autopilot:
 #####plot
 def main():
     import matplotlib.pyplot as plt
-    global ds, dr, rudderGainMap, state ##so adjustments can be made in different functions
+    global ds, dr, rudderGainMap, state, mode ##so adjustments can be made in different functions
     ds , dr = np.pi/2,0 ##sets initial sail and rudder angles
+    mode = "keep"
 
     fig = plt.figure(figsize=(10, 10))
     ax = plt.axes(xlim=(-20, 20), ylim=(-20, 20))
@@ -466,6 +489,12 @@ def main():
         wx, wy = state["wind_vec"]                        # plot-x = East, plot-y = North
         return np.hypot(wx, wy), np.arctan2(wx, wy)       # (speed, bearing toward)
 
+    def set_waves():
+        ##frequency
+        ##velocity vector
+        pass
+        
+
     def body_to_plot(xb, yb, X):
         N, E, psi = X[0], X[1], X[3] ##x,y and heading draw line from COG 
         return (E + xb * np.sin(psi) + yb * np.cos(psi),
@@ -487,6 +516,8 @@ def main():
             ox, oy = wind_origin()
             state["wind_vec"] = np.array([event.xdata - ox, event.ydata - oy])
 
+
+
     fig.canvas.mpl_connect("key_press_event", on_key)
     fig.canvas.mpl_connect("close_event", lambda e: state.update(running=False))
     fig.canvas.mpl_connect("button_press_event",
@@ -496,8 +527,9 @@ def main():
 
     dt, substeps = 0.01, 4
     plt.ion()
-
+    time = 0
     while state["running"]:
+        time += dt
         v_tw, a_tw = wind_tuple() ##true wind returns hypotneuse and angle
         wind = (v_tw, a_tw) 
         ##run calcs
@@ -515,6 +547,11 @@ def main():
 
         ##unpack state dic for updating screen
         X = state["X"]
+
+        ##add wave 
+##        X[5] += (1*np.sin(time))*np.sin(X[3])
+##        X[4] += (1*np.sin(time))*np.cos(X[3])
+        
         ######draw everything
         # hull
         hx, hy = body_to_plot(np.array([-1.0, 1.4]), np.zeros(2), X)
@@ -524,7 +561,7 @@ def main():
         sx, sy = body_to_plot(np.array([mx, mx - 1.2 * np.cos(ds)]),
                               np.array([my, my + 1.2 * np.sin(ds)]), X)
         sail_line.set_data(sx, sy)
-        # rudder at stern
+        # rudder
         xr = P["rudder"]["pos"][0]
         rx, ry = body_to_plot(np.array([xr, xr - 0.4 * np.cos(dr)]),
                               np.array([0.0, 0.4 * np.sin(dr)]), X)
@@ -557,7 +594,11 @@ def main():
                       f"heading {np.degrees(X[3]):6.1f}  (des {np.degrees(state['psi_d']):6.1f})\n"
                       f"heel {np.degrees(X[2]):5.1f} deg\n"
                       f"app. wind {np.degrees(a_aw):6.1f} deg\n"
-                      f"sail {np.degrees(ds):5.1f}  rudder {np.degrees(dr):5.1f}")
+                      f"sail {np.degrees(ds):5.1f}  rudder {np.degrees(dr):5.1f}\n"
+                      f"mode: {mode}\n"
+                      f"time {time * 4 :4.2f}"
+                      )
+        
         plt.pause(0.001)
 
 
