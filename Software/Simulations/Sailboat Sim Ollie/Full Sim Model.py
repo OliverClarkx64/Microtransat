@@ -227,7 +227,7 @@ def tack(X, wp0, wp1, alpha, wind, self, dt):
     self.phiAccum += s*self.phi_dot*dt if self.tacking else 0
 
     ##switch sides 
-    if self.tacking and wrap((psi_d + self.phiAccum) - wind[1]) > 2.1: #2.2: ##close to no go then switch side
+    if self.tacking and wrap((psi_d + s * self.phiAccum) - wind[1]) > 2.1: #2.2: ##close to no go then switch side
         ##switch side after circle
         self.right = False if self.right else True
         self.tacking = False
