@@ -3,6 +3,7 @@
 
 Frames : NED. x = North, y = East, z = Down.  psi = heading, clockwise from North.
 State  : X = [x, y, phi, psi, u, v, p, r]   (eta, nu)
+              x, y, heel, heading, surge, sway, angular velocities for heel and heading
 Inputs : delta_s (sail angle), delta_r (rudder angle), true wind (v_tw, alpha_tw)
          alpha_tw = direction the wind blows TOWARD, bearing from North (rad).
 Plot   : plot-x = East, plot-y = North.
