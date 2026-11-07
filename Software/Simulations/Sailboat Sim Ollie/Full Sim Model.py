@@ -237,51 +237,6 @@ def tack(X, wp0, wp1, alpha, wind, self, dt):
     ##maybe just point psi_d slightly ahead of our actual heading to prevent overshooting the desired
     return wrap(psi_d + self.phiAccum)
 
-
-def tack2(X, wp0, wp1, alpha, wind, self, dt):
-    N, E = X[0], X[1]
-    ##switch between a clip of to los of path or something windDirection - 2.27, windDirection + 2.27
-    e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
-
-    if self.justStarted: ##see if it should go right or left
-        self.right = True
-        self.justStarted = False
-
-    ##ok can do this circle logic or just incrementally add at a given rate 
-    if e >= 10 and self.onCircle == False: # switch from right to left init circle manouvre
-        ##define circle centre
-        self.cN = N - self.cR*np.sin(X[3]) ##heading ##doesnt account for which way the circle is
-        self.cE = E + self.cR*np.cos(X[3])
-        self.onCircle = True
-
-    if self.onCircle:
-        if self.right:
-            ##determine pos on circle
-            ##bearing so east is y
-            self.circlePhi = np.atan2(E - self.cE, N - self.cN)
-            psi_d = wrap(self.circlePhi + np.pi/2) ##account for direction here too 
-        else:
-            self.circlePhi = np.atan2(E - self.cE, N - self.cN) ##the same need direction control +1 or -1 scale
-            psi_d = self.circlePhi + np.pi/2
-    else:
-        if self.right:
-            psi_d = wind[1] - 2.27
-        else:
-            psi_d = wind[1] + 2.27
-
-    if self.onCircle and abs(psi_d - wind[1]) > 2.3: ##close to no go then switch side
-        ##switch side after circle
-        if self.right:
-            self.right = False
-        else:
-            self.right = True
-        self.onCircle = False ## how do i ensure another loop doesnt start?
-
-    ##first try switching
-    ##track left and right method or try wrapping to each side with a fixed adding term
-        
-    return psi_d
-
 def jibe(X, wp0, wp1, alpha, wind):
     return wind[1] - 2.27
 
