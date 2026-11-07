@@ -210,24 +210,24 @@ def tack(X, wp0, wp1, alpha, wind, self, dt):
     ##
     s = 1 if self.right else -1
 
-    psi_d = wrap(wind[1] - s*2.27)
+    psi_d = wrap(wind[1] - s*2.1)
     N, E = X[0], X[1]
     ##switch between a clip of to los of path or something windDirection - 2.27, windDirection + 2.27
     e = -(N - wp0[1]) * np.sin(alpha) + (E - wp0[0]) * np.cos(alpha) ##cross track error given on paper
-
-    ##start circle manouvre 
-    if abs(e) >= 10 and self.tacking == False: # switch from right to left init circle manouvre
+##    print(e)
+    
+    ##start circle manouvre
+    ##is e pos and neg? yeah left and right of path so
+    ##if left and smaller or right and bigger 
+    if ((s == 1 and e >= 10) or (s == -1 and e <= -10)) and self.tacking == False: # switch from right to left init circle manouvre
         ##define rate of change of heading
         self.phi_dot = 0.4 ##[rad/s^2] ##change depending on wind speed
         self.tacking = True
 
     self.phiAccum += s*self.phi_dot*dt if self.tacking else 0
 
-    ##switch tack side
-##    if self.tacking:
-##        self.phiAccum += s*self.phi_dot*dt
-        
-    if self.tacking and (wrap(psi_d + self.phiAccum) - wind[1]) < 2.3:#2.2: ##close to no go then switch side
+    ##switch sides 
+    if self.tacking and wrap((psi_d + self.phiAccum) - wind[1]) > 2.1: #2.2: ##close to no go then switch side
         ##switch side after circle
         self.right = False if self.right else True
         self.tacking = False
@@ -583,7 +583,7 @@ def main():
         ##view window -- follows boat
         ax.set_xlim(X[1] - 20, X[1] + 20); ax.set_ylim(X[0] - 20, X[0] + 20)
         ##stays still
-        #ax.set_xlim(-50, 50); ax.set_ylim(-5, 105)
+        ax.set_xlim(-50, 50); ax.set_ylim(-5, 105)
         ##wind arrow follows view
         ox, oy = wind_origin()
         wind_arrow.set_position((ox, oy))
